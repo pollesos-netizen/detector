@@ -12,6 +12,8 @@
 
   <!-- JSZip: ZIP 기반 파일(HWPX·DOCX·PPTX·XLSX) 파싱 -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <!-- CFB: HWP 5.x 바이너리 파싱 -->
+  <script src="https://cdn.jsdelivr.net/npm/cfb/dist/cfb.min.js"></script>
   <!-- PDF.js: PDF 파싱 -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.2.67/pdf.min.mjs" type="module" id="pdfjs-script"></script>
 
@@ -248,7 +250,7 @@
   <div class="header-icon">🔍</div>
   <div>
     <div class="header-title">민감정보 탐지기 — 1단계</div>
-    <div class="header-sub">HWPX · DOCX · PPTX · XLSX · PDF 지원</div>
+    <div class="header-sub">HWP · HWPX · DOCX · PPTX · XLSX · PDF 지원</div>
   </div>
   <div class="header-badge">패턴(정규식) 기반</div>
 </div>
@@ -257,11 +259,11 @@
 
   <!-- 업로드 존 -->
   <div class="drop-zone" id="drop-zone">
-    <input type="file" id="file-input" accept=".hwpx,.docx,.pptx,.xlsx,.pdf" style="display:none" />
+    <input type="file" id="file-input" accept=".hwp,.hwpx,.docx,.pptx,.xlsx,.pdf" style="display:none" />
     <div class="icon">📄</div>
     <div id="drop-label">
       <div class="main">파일을 드래그하거나 클릭하여 선택</div>
-      <div class="sub">HWPX · DOCX · PPTX · XLSX · PDF</div>
+      <div class="sub">HWP · HWPX · DOCX · PPTX · XLSX · PDF</div>
     </div>
   </div>
 
@@ -316,6 +318,7 @@ const ACTION_COLOR = { 삭제:"#DC2626", 마스킹:"#7C3AED", 치환:"#2563EB", 
 // ─────────────────────────────────────────────────────────────
 async function extractChunks(file) {
   const name = file.name.toLowerCase();
+  if (name.endsWith(".hwp"))  return parseHwp(file);
   if (name.endsWith(".hwpx")) return parseHwpx(file);
   if (name.endsWith(".docx")) return parseDocx(file);
   if (name.endsWith(".pptx")) return parsePptx(file);
@@ -429,6 +432,114 @@ async function parsePdf(file) {
     Object.keys(lines).sort((a,b) => b-a)
       .map(y => lines[y].join("").trim()).filter(t => t)
       .forEach((text, idx) => { chunks.push({ text, location: `${i}페이지 · ${idx+1}번째 줄` }); });
+  }
+  return chunks;
+}
+
+// ─────────────────────────────────────────────────────────────
+// HWP 5.x 바이너리 파서 (CFB)
+// ─────────────────────────────────────────────────────────────
+const TAG_PARA_TEXT = 0x0043;
+const MAX_DECOMPRESS = 100 * 1024 * 1024;
+
+async function tryDecompress(data, format) {
+  const ds = new DecompressionStream(format);
+  const writer = ds.writable.getWriter();
+  const reader = ds.readable.getReader();
+  writer.write(data).catch(() => {});
+  writer.close().catch(() => {});
+  const chunks = []; let total = 0;
+  while (total < MAX_DECOMPRESS) {
+    try {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value); total += value.length;
+    } catch { break; }
+  }
+  if (chunks.length === 0) return null;
+  const out = new Uint8Array(total); let off = 0;
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  return out;
+}
+
+async function hwpDecompress(data) {
+  const isZlib = data.length >= 2 && data[0] === 0x78;
+  const result = await tryDecompress(data, isZlib ? "deflate" : "deflate-raw");
+  if (result) return result;
+  const fallback = await tryDecompress(data, isZlib ? "deflate-raw" : "deflate");
+  return fallback ?? data;
+}
+
+function parseHwpRecords(data) {
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const records = []; let offset = 0;
+  while (offset + 4 <= data.length) {
+    const hdr = view.getUint32(offset, true); offset += 4;
+    const tagId = hdr & 0x3ff;
+    let size = (hdr >> 20) & 0xfff;
+    if (size === 0xfff) {
+      if (offset + 4 > data.length) break;
+      size = view.getUint32(offset, true); offset += 4;
+    }
+    if (offset + size > data.length) break;
+    records.push({ tagId, data: data.subarray(offset, offset + size) });
+    offset += size;
+  }
+  return records;
+}
+
+function utf16LeToString(data) {
+  const bytes = data.length % 2 === 0 ? data : data.slice(0, -1);
+  const decoded = new TextDecoder("utf-16le").decode(bytes);
+  let result = "";
+  for (const ch of decoded) {
+    const cp = ch.codePointAt(0);
+    if (cp < 0x20) continue;
+    if (cp >= 0xe000 && cp <= 0xf8ff) continue;
+    result += ch;
+  }
+  return result;
+}
+
+function hwpIsCompressed(cfb) {
+  for (let i = 0; i < cfb.FullPaths.length; i++) {
+    if (/FileHeader$/i.test(cfb.FullPaths[i])) {
+      const h = new Uint8Array(cfb.FileIndex[i].content);
+      if (h.length < 40) return true;
+      return (new DataView(h.buffer, h.byteOffset).getUint32(36, true) & 0x01) !== 0;
+    }
+  }
+  return true;
+}
+
+function hwpFindSections(cfb) {
+  const found = [];
+  for (let i = 0; i < cfb.FullPaths.length; i++) {
+    const m = cfb.FullPaths[i].match(/Section(\d+)$/i);
+    if (m && /BodyText/i.test(cfb.FullPaths[i]))
+      found.push({ idx: parseInt(m[1]), entry: cfb.FileIndex[i] });
+  }
+  found.sort((a, b) => a.idx - b.idx);
+  return found.map(s => s.entry);
+}
+
+async function parseHwp(file) {
+  const buf = await file.arrayBuffer();
+  let cfb;
+  try { cfb = CFB.parse(new Uint8Array(buf)); }
+  catch (e) { throw new Error(`HWP CFB 파싱 실패: ${e.message}`); }
+  const compressed = hwpIsCompressed(cfb);
+  const sections   = hwpFindSections(cfb);
+  const chunks = []; let paraNum = 0;
+  for (const entry of sections) {
+    let data = new Uint8Array(entry.content);
+    if (compressed) data = await hwpDecompress(data);
+    const records = parseHwpRecords(data);
+    for (const { tagId, data: recData } of records) {
+      if (tagId !== TAG_PARA_TEXT) continue;
+      const text = utf16LeToString(recData).trim();
+      if (text) { paraNum++; chunks.push({ text, location: `${paraNum}번째 단락` }); }
+    }
   }
   return chunks;
 }
