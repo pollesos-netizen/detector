@@ -1,5 +1,6 @@
  import { useState, useCallback, useRef } from "react";
  import JSZip from "jszip";
+import { parseHwp } from "./hwpParser";
 
 import * as pdfjsLib from "pdfjs-dist";
 import PdfWorker from "pdfjs-dist/build/pdf.worker.mjs?url";
@@ -113,6 +114,7 @@ const PATTERNS = [
 
 async function extractChunks(file) {
   const name = file.name.toLowerCase();
+  if (name.endsWith(".hwp"))  return await parseHwp(file);
   if (name.endsWith(".hwpx")) return await parseHwpx(file);
   if (name.endsWith(".docx")) return await parseDocx(file);
   if (name.endsWith(".pptx")) return await parsePptx(file);
@@ -356,7 +358,7 @@ export default function Detector() {
         <div style={{ width: 36, height: 36, background: "#2563EB", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18 }}>🔍</div>
         <div>
           <div style={{ fontWeight: 700, fontSize: 16 }}>민감정보 탐지기 — 1단계</div>
-          <div style={{ fontSize: 12, color: "#94A3B8", marginTop: 2 }}>HWPX · DOCX · PPTX · XLSX 지원</div>
+          <div style={{ fontSize: 12, color: "#94A3B8", marginTop: 2 }}>HWP · HWPX · DOCX · PPTX · XLSX · PDF 지원</div>
         </div>
         <div style={{ marginLeft: "auto", fontSize: 12, color: "#64748B", background: "#0F172A", borderRadius: 6, padding: "4px 10px" }}>
           패턴(정규식) 기반
@@ -383,7 +385,7 @@ export default function Detector() {
           onMouseEnter={(e) => (e.currentTarget.style.borderColor = "#2563EB")}
           onMouseLeave={(e) => (e.currentTarget.style.borderColor = "#CBD5E1")}
         >
-          <input ref={inputRef} type="file" accept=".hwpx,.docx,.pptx,.xlsx,.pdf" style={{ display: "none" }} onChange={onPick} />
+          <input ref={inputRef} type="file" accept=".hwp,.hwpx,.docx,.pptx,.xlsx,.pdf" style={{ display: "none" }} onChange={onPick} />
           <div style={{ fontSize: 36, marginBottom: 12 }}>📄</div>
           {file ? (
             <div>
@@ -396,7 +398,7 @@ export default function Detector() {
             <div>
               <div style={{ fontWeight: 600, fontSize: 15, color: "#334155" }}>파일을 드래그하거나 클릭하여 선택</div>
               <div style={{ fontSize: 13, color: "#94A3B8", marginTop: 6 }}>
-                HWPX · DOCX · PPTX · XLSX · PDF
+                HWP · HWPX · DOCX · PPTX · XLSX · PDF
               </div>
             </div>
           )}
