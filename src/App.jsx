@@ -8,6 +8,16 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = PdfWorker;
 
 // import { generateAndDownload } from "./reportGenerator";
 
+const KO_SINGLE_SURNAME =
+  "(?:김|이|박|최|정|강|조|윤|장|임|한|오|서|신|권|황|안|송|전|홍|유|고|문|양|손|배|백|허|남|심|노|하|곽|성|차|주|우|구|민|류|나|진|지|엄|채|원|천|방|공|현|함|변|염|여|추|도|소|석|선|설|마|길|연|위|표|명|기|반|라|왕|금|옥|육|인|맹|제|모|탁|국|어|은|편|용|예|봉|사|부|가|복|태|목|형|계|피|두|감)";
+const KO_COMPOUND_SURNAME = "(?:제갈|남궁|선우|독고|동방|황보)";
+const KO_NAME_TITLE =
+  "(?:씨|님|부장|차장|과장|대리|주임|사원|팀장|본부장|이사|상무|전무|사장|기관사|기장|승무원)";
+const KO_NAME_WITH_TITLE_PATTERN =
+  `(?:${KO_COMPOUND_SURNAME}[가-힣]{1,2}|${KO_SINGLE_SURNAME}[가-힣]{1,3})`;
+const KO_STANDALONE_NAME_PATTERN =
+  `(?:${KO_COMPOUND_SURNAME}[가-힣]{1,2}|${KO_SINGLE_SURNAME}[가-힣]{2,3})`;
+
 // ── 정규식 패턴 정의 ──────────────────────────────────────────
 const PATTERNS = [
   {
@@ -95,8 +105,11 @@ const PATTERNS = [
     label: "한국인 성명 추정",
     grade: "S",
     action: "마스킹",
-    regex: /[가-힣]{2,4}(?:\s*(?:씨|님|부장|차장|과장|대리|주임|사원|팀장|본부장|이사|상무|전무|사장|기관사|기장|승무원))/g,
-    desc: "직책·호칭과 결합된 성명 — 직접 식별 가능",
+    regex: new RegExp(
+      `(?<![가-힣])(?:${KO_NAME_WITH_TITLE_PATTERN}(?=\\s*${KO_NAME_TITLE})|${KO_STANDALONE_NAME_PATTERN}(?=[^가-힣]|$))`,
+      "g"
+    ),
+    desc: "한국인 성명 단독(3~4자) 또는 직책·호칭과 결합된 성명 — 직접 식별 가능",
   },
   {
     id: "vlan",
